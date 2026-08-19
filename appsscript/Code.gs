@@ -37,12 +37,23 @@ function setupConfigSheet() {
   try {
     var cfgSheet = ensureConfigSheet_(ss);
     var before = readConfigRows_(cfgSheet).length;
-    syncConfigFromDrive_(ss, cfgSheet);
+    var chips = syncConfigFromDrive_(ss, cfgSheet);
     var after = readConfigRows_(cfgSheet).length;
-    ui.alert('設定分頁已更新。\n\n' +
-             '相簿共 ' + after + ' 個' +
-             (after > before ? '（新增 ' + (after - before) + ' 個）' : '（沒有新增）') +
-             '。\n\n接著按「② 產生相簿分頁」。');
+
+    var msg = '設定分頁已更新。\n\n' +
+              '相簿共 ' + after + ' 個' +
+              (after > before ? '（新增 ' + (after - before) + ' 個）' : '（沒有新增）') + '。\n';
+
+    if (chips.misses.length) {
+      msg += '\n⚠ 這 ' + chips.misses.length + ' 個相簿找不到對應的發布目標，' +
+             '不會被發布：\n　' + chips.misses.join('\n　') +
+             '\n（要在 Config.gs 的 TARGETS 對照表補上）\n';
+    }
+    if (chips.fallback) {
+      msg += '\n⚠ 檔案方塊寫不進去，「發布目標」欄改成純文字。\n　' + chips.error +
+             '\n　發布功能不受影響，但這件事要修。\n';
+    }
+    ui.alert(msg + '\n接著按「② 產生相簿分頁」。');
   } catch (e) {
     ui.alert('✗ ' + (e.message || e));
   }
@@ -256,8 +267,7 @@ function ensureConfigSheet_(ss) {
   if (ok) return sheet;
 
   // Schema 變了：把舊表留著（加時間戳，第二次遷移才不會撞名），
-  // 並把使用者手打的發布目標 ID 依「來源資料夾ID」帶到新表，
-  // 那是全系統唯一無法重新產生的資料。
+  // 並把兩個核取欄的狀態依「來源資料夾ID」帶到新表。
   var carried = harvestOldRows_(sheet);
   var stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyyMMdd_HHmmss');
   sheet.setName(CFG.CONFIG_SHEET + '_舊_' + stamp);
@@ -266,11 +276,13 @@ function ensureConfigSheet_(ss) {
 
 
 /**
- * 換 schema 時，把「發布目標試算表ID」從舊表帶到新表，以 folderId 為鍵。
- * 那是全系統唯一由使用者手打、無法重新產生的資料。
+ * 換 schema 時，把兩個核取欄的狀態從舊表帶到新表，以 folderId 為鍵。
  *
- * 靠**標題名稱**定位欄位，不靠「看起來像 ID」猜——舊 schema 裡有好幾個都長得
- * 像 ID 的欄，用猜的會把錯的那個帶過來。找不到標題就不帶，寧可讓你重填。
+ * 為什麼非帶不可：排好版的相簿，「匯入相片」是被**取消**勾選的。重建時若一律
+ * 回到預設的勾選狀態，之後誤按②就會把排好的版整個換掉。這件事發生過一次。
+ *
+ * 靠**標題名稱**定位欄位，不靠欄號——遷移的前提就是欄序變了。找不到標題就不帶，
+ * 那時新表會用預設值（匯入=勾、發布=不勾）。
  */
 function harvestOldRows_(oldSheet) {
   var out = [];
@@ -283,14 +295,19 @@ function harvestOldRows_(oldSheet) {
       return String(v).trim();
     });
     var fCol = head.indexOf('來源資料夾ID');
-    var pCol = head.indexOf('發布目標試算表ID');
-    if (fCol === -1 || pCol === -1) return out;
+    var iCol = head.indexOf('匯入相片');
+    var pCol = head.indexOf('發布');
+    if (fCol === -1) return out;
 
     var vals = oldSheet.getRange(2, 1, last - 1, wide).getValues();
     for (var i = 0; i < vals.length; i++) {
       var folderId = String(vals[i][fCol]).trim();
-      var publishId = String(vals[i][pCol]).trim();
-      if (folderId && publishId) out.push({ folderId: folderId, publishId: publishId });
+      if (!folderId) continue;
+      out.push({
+        folderId: folderId,
+        importOn: iCol === -1 ? null : isChecked_(vals[i][iCol]),
+        publishOn: pCol === -1 ? null : isChecked_(vals[i][pCol])
+      });
     }
   } catch (ignored) {}
   return out;
@@ -305,10 +322,11 @@ function buildConfigSheet_(ss, carried) {
   sheet.setColumnWidth(CFG.COL_ALBUM, 130);
   sheet.setColumnWidth(CFG.COL_FOLDER_ID, 300);
   sheet.setColumnWidth(CFG.COL_STAGING, 130);
-  sheet.setColumnWidth(CFG.COL_PUBLISH_ID, 300);
+  sheet.setColumnWidth(CFG.COL_PUBLISH_TARGET, 220);   // 放檔案方塊，不再是 44 字元的 ID
   sheet.setColumnWidth(CFG.COL_PUBLISH_NAME, 110);
   sheet.setColumnWidth(CFG.COL_NOTE, 380);
-  // 兩個核取欄各自的意義寫在標題儲存格的備註裡，滑鼠移上去就看得到
+  // 需要解釋的欄位把說明寫在標題儲存格的備註裡，滑鼠移上去就看得到
+  sheet.getRange(1, CFG.COL_PUBLISH_TARGET).setNote(CFG.NOTE_TARGET);
   sheet.getRange(1, CFG.COL_IMPORT).setNote(CFG.NOTE_IMPORT);
   sheet.getRange(1, CFG.COL_PUBLISH_ON).setNote(CFG.NOTE_PUBLISH);
   sheet.getRange(CFG.STATUS_CELL).setValue('尚未執行');
@@ -323,7 +341,11 @@ function buildConfigSheet_(ss, carried) {
 /**
  * 掃描根資料夾的子資料夾，把缺的列補進設定分頁。
  * 配對依據是來源資料夾 ID，不是名稱——資料夾改名不會變成重複列。
- * 規則只有一條：**只填空白，絕不覆蓋既有值**，包含「啟用」在內。
+ *
+ * 規則：**只填空白，絕不覆蓋既有值**，包含兩個核取欄在內。
+ * **唯一的例外是「發布目標」欄**——它是從相簿名推導出來的衍生值，不是使用者
+ * 的資料，所以每次都整欄重寫。若對它也套用「不覆蓋」，一個過期的 ⚠ 就會
+ * 永遠黏在那裡，即使對照表早就補好了。
  */
 function syncConfigFromDrive_(ss, cfgSheet) {
   var existing = readConfigRows_(cfgSheet);
@@ -377,12 +399,18 @@ function syncConfigFromDrive_(ss, cfgSheet) {
     cfgSheet.getRange(newRow, CFG.COL_IMPORT).insertCheckboxes();
     cfgSheet.getRange(newRow, CFG.COL_PUBLISH_ON).insertCheckboxes();
     cfgSheet.getRange(newRow, 1, 1, CFG.HEADERS_CONFIG.length).setValues([[
-      alb.name, alb.id, name, prev.publishId || '', derivePublishName_(alb.name),
-      true,      // 匯入相片：預設開
-      false,     // 發布：預設關，排版完成後自己勾
+      alb.name, alb.id, name,
+      '',        // 發布目標：留白，等下由 writeTargetChips_ 填方塊
+      derivePublishName_(alb.name),
+      // 遷移過來的列沿用舊狀態；真正的新相簿才用預設（匯入=開、發布=關）
+      prev.importOn === null || prev.importOn === undefined ? true : prev.importOn,
+      prev.publishOn === null || prev.publishOn === undefined ? false : prev.publishOn,
       ''
     ]]);
   }
+
+  // 整欄重寫，新舊列都一樣。放在最後一次做，只呼叫一次 API。
+  return writeTargetChips_(cfgSheet, readConfigRows_(cfgSheet));
 }
 
 
@@ -401,7 +429,8 @@ function readConfigRows_(cfgSheet) {
       album: String(v[CFG.COL_ALBUM - 1]).trim(),
       folderId: folderId,
       staging: String(v[CFG.COL_STAGING - 1]).trim(),
-      publishId: String(v[CFG.COL_PUBLISH_ID - 1]).trim(),
+      // 刻意不讀「發布目標」欄。它是顯示用的方塊，發布時的依據是 resolveTarget_()，
+      // 這樣就不存在「欄位內容跟實際寫入目標不一致」的可能。
       publishName: String(v[CFG.COL_PUBLISH_NAME - 1]).trim(),
       importOn: isChecked_(v[CFG.COL_IMPORT - 1]),
       publishOn: isChecked_(v[CFG.COL_PUBLISH_ON - 1]),

@@ -18,14 +18,10 @@ function publishToTarget() {
     return;
   }
 
-  var rows = readConfigRows_(cfgSheet).filter(function (r) {
-    return r.publishOn && r.publishId;
-  });
+  var rows = readConfigRows_(cfgSheet).filter(function (r) { return r.publishOn; });
   if (!rows.length) {
     ui.alert('沒有可發布的項目。\n\n' +
-             '要發布的那一列需要兩件事：\n' +
-             '　1. 「發布目標試算表ID」欄填了目標活頁簿 ID\n' +
-             '　2. 「發布」欄已勾選（新相簿預設不勾）');
+             '設定分頁裡要發布的那一列，「發布」欄要勾起來（新相簿預設不勾）。');
     return;
   }
 
@@ -81,6 +77,14 @@ function publishOne_(ui, ss, job) {
   var src = ss.getSheetByName(job.staging);
   if (!src) throw new Error('找不到 staging 分頁「' + job.staging + '」。');
 
+  // 目標在這裡重新解析，不讀設定分頁的「發布目標」欄——那一欄只是給人看的方塊。
+  // 唯一的真相來源是 Config.gs 的對照表。
+  var target = resolveTarget_(job.album);
+  if (!target) {
+    throw new Error('相簿「' + job.album + '」對應到物件名「' + normalizeName_(job.album) +
+                    '」，但 Config.gs 的 TARGETS 對照表裡沒有這一項，不知道要發布到哪。');
+  }
+
   // 半成品不該進共編檔。進度是 0 表示沒有執行紀錄（例如換過 schema，
   // 或分頁是很久以前產的），那就不擋——寧可放行也不要誤擋一個好好的分頁。
   var photos = listAlbumPhotos_(job.folderId);
@@ -90,7 +94,7 @@ function publishOne_(ui, ss, job) {
   }
 
   // openById 失敗會在這裡拋錯，此時還沒對目標做過任何事
-  var dst = SpreadsheetApp.openById(job.publishId);
+  var dst = SpreadsheetApp.openById(target.id);
   if (dst.getSheetByName(job.publishName)) {
     throw new Error('目標「' + dst.getName() + '」已經有分頁「' + job.publishName +
                     '」了，為避免覆寫已中止。');
@@ -102,7 +106,7 @@ function publishOne_(ui, ss, job) {
     '　來源：' + job.staging + '（' + photos.length + ' 張）\n' +
     '　目標：' + dst.getName() + '\n' +
     '　分頁名：' + job.publishName + '\n' +
-    sizeWarning_(job.publishId, photos.length) + '\n' +
+    sizeWarning_(target.id, photos.length) + '\n' +
     '該檔案的所有協作者都會看到這個新分頁。確定嗎？',
     ui.ButtonSet.YES_NO);
   if (answer !== ui.Button.YES) return '－ ' + job.album + '：已取消';

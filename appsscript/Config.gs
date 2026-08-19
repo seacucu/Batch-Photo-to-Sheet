@@ -21,12 +21,12 @@ var CFG = {
 
   // 設定分頁欄位。順序即欄號，改這裡等於改 schema（會觸發遷移）。
   HEADERS_CONFIG: ['相簿名稱', '來源資料夾ID', 'staging分頁名',
-                   '發布目標試算表ID', '發布分頁名',
+                   '發布目標', '發布分頁名',
                    '匯入相片', '發布', '狀態'],
   COL_ALBUM: 1,
   COL_FOLDER_ID: 2,
   COL_STAGING: 3,
-  COL_PUBLISH_ID: 4,          // ← 唯一需要使用者手填的欄位
+  COL_PUBLISH_TARGET: 4,      // 程式自動帶入的檔案方塊。是輸出不是輸入，沒人手填
   COL_PUBLISH_NAME: 5,
   COL_IMPORT: 6,              // 核取：要不要產生分頁／匯入照片
   COL_PUBLISH_ON: 7,          // 核取：要不要發布。新列預設不勾——發布是唯一
@@ -37,9 +37,13 @@ var CFG = {
                '　　　　既有的分頁會整個換掉，排好的版也會沒有。\n' +
                '取消：完全不碰這一列。\n\n' +
                '排版完成後請把這一欄取消勾選，之後按②就不會再動到它。',
-  NOTE_PUBLISH: '勾選：「發布到正式目標」會把這一列的分頁複製進 D 欄指定的活頁簿。\n' +
+  NOTE_PUBLISH: '勾選：「發布到正式目標」會把這一列的分頁複製進「發布目標」欄那份活頁簿。\n' +
                 '取消：不發布。\n\n' +
                 '新相簿預設不勾——排版完成、確認無誤之後再自己勾起來。',
+  NOTE_TARGET: '這一欄由程式自動帶入，不用也不要手填。\n\n' +
+               '對應關係是「相簿名去掉日期 → 老闆的巡房維護活頁簿」，\n' +
+               '寫在 Config.gs 的 TARGETS 對照表裡。\n' +
+               '顯示 ⚠ 表示對照表裡沒有這個物件，那一列不會被發布。',
 
   // staging / 目標分頁版面
   HEADER_ROW: 1,
@@ -73,6 +77,54 @@ var CFG = {
   SOFT_TIME_LIMIT_MS: 4 * 60 * 1000,
   SAFETY_TRIGGER_MS: 7 * 60 * 1000,   // 保險觸發器：排在任何執行都不可能還活著之後
   NEXT_CYCLE_MS: 30 * 1000,
+
+  // 發布目標對照表 — 老闆「3.巡房維護」資料夾底下的 34 份活頁簿。
+  //
+  // 鍵是檔名去掉「巡房維護.xlsx」剩下的部分，**照抄 Drive 上的寫法**（含「町」），
+  // 這樣才能跟 Drive 逐字對照、確認沒抄錯。比對時兩邊都會過 normalizeName_()，
+  // 所以相簿叫「0727唐物a」也對得上「唐物町a」。
+  //
+  // 這些 ID 是常數，不是每輪巡檢會變的東西，所以放在程式裡而不是讓人每次手打——
+  // 打錯一個字元的後果是把照片寫進別人物件的共編檔。
+  // 老闆新增物件時在這裡加一行；註解是它在 Drive 上的位置。
+  TARGETS: {
+    '唐物町a':      '1yS-rV2BVnCBDu5WobI8MFr80tVtvevCC',  // 京都房源/唐物區
+    '唐物町b':      '1Y-FKo2pJ1kqMevzkbN4nq9cU_DDBxmel',
+    '唐物町c':      '1o3kyAu5CQPoH1yAy7oRWDJBC4h25Ra-c',
+    '寶柿町':       '1L6_vz5On6DszHupJs4yhWYWObeP5xK3f',
+    '京吹雪':       '1i1esSXS4Qx4DZINg_WRKlovhcaoHkBym',  // 京都房源/東山區
+    '緣宿':         '1bf-dXUVpoxHAqKXagql2F1VZ-7io25Y1',
+    '風舍':         '1-pji6kkqgR1culPthfLSUSCphMZpMmrZ',
+    '念慈庵':       '1_zm4ZvWpm5onkQNS2KMKL3IOjLJE7I72',
+    '東福寺':       '1FhQJYXeU0cBTco70ZRWVMjSkq-q7rqMX',
+    '有緣舍':       '1alZLoU6PipxrfLhxjs6JdedgcD-jv4sZ',
+    '無憂舍':       '1swJv-W4weYKnTcHeKZTzb3mk-AQC7mcT',
+    // 針小路a 在同一個資料夾裡另有一份 290MB 的 .gsheet（原生格式的轉檔產物）。
+    // 這裡取 .xlsx，跟其餘 33 份一致。
+    '針小路a':      '1A6GPxDCLU4kcEXWldjOGWtaUJ0NOU9Oq',  // 京都房源/京都站區
+    '針小路b':      '1P38hdXQxxJvgAvipiR_owMDfUaem5l21',
+    '藤木町':       '1AOh2dKjCua82Kzcafyk5sy7z7vCM9EH8',
+    '洛思崖':       '1TkH5JC6SlJ5dKb9UsFyfAmcgCS4hJELD',
+    '鞍馬口':       '1UdeICgANgyhdq48NrtXSkIyNN_Wa-p-Y',
+    '季京都1a':     '1wt3noJldwEZWyd54OiwEdUadwlet_ZOd',
+    '季京都2b':     '1usoBQhaWoYHFbSBbweqbA26GlATDQGVI',
+    '季京都2c':     '12-N957GYmyvlsbujrMmv8XnylRzTvRgp',
+    '五条a':        '1Agx8iVloNtUvfZ5G35aykVQZ-0NEFj83',  // 京都房源/五條區
+    '五条b':        '1lNOSWuB0qyTLg_rTadiO-SVwZw6Xr1pk',
+    '柿本町':       '1hEECRCHwEYZnA30-t9_KPGjNSOzi_U0L',
+    '松原':         '1Pj_RDDM8xyGKD1J6SYDux0toqovg3orP',
+    'モコ深江橋':   '1oQ1s2qFYiDsbu4PaaC1znxGQhOXhN8NI',  // 大阪房源
+    'モコ中道':     '1uvHMDFXhrdpJz5AYVp_dpeVzDWAk7iE5',
+    'モコ九條':     '1ha5pydkPawigNe4brSUTHB4iymW2OKQx',
+    'モコ森ノ宮':   '1gftT_Yg1D-LHU1To7M-TnEVFFf-GeJPT',
+    'ジブラ天六':   '1NYPA1b05hegnSl6z2A1v47UFNrw7cyHb',
+    'ジブラ天王寺': '1hxiuS5H5U50an8JtvxUbhBXgc01-1iig',
+    'ジブラ九條':   '1B6c1tYEg5Elf64Njb6_VnHct7UysTmVp',
+    'ジブラ森ノ宮': '1b16RFt6yi9G8hLaIXKt4ySHL5rV8hwg1',
+    'ジブラ浮田':   '1Le3MW8xQacEJQHhRzgn61vslX3Xp7qY7',
+    'ジブラ阿倍野': '1ZIw0idOAo3Qy6nuVZ7oD9FZ1lDpJ3m2q',
+    '小魚':         '1O4_g04K0DmVkdFOBtIO1gdYtx4lAo5sP'
+  },
 
   // 「項目」下拉清單。37 項，逗號串接約 274 字元，遠低於 500 字元上限。
   ITEMS: [
