@@ -1,0 +1,8 @@
+# 預設交給 git 正規化：repo 裡存 LF，簽出時依平台。
+* text=auto
+
+# 批次檔一律 CRLF。cmd.exe 對 LF 大多沒問題，但沒必要賭。
+*.cmd text eol=crlf
+
+# Apps Script 原始碼
+*.gs text diff=javascript

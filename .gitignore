@@ -1,4 +1,18 @@
+# 可攜式工具鏈（Node、clasp、uv）。刻意不進 git——它是「這台機器裝不了東西」
+# 的權宜之計，不是專案的一部分。部署方式見 README。
 tools/
+
+# clasp 的登入憑證。它會被寫到使用者家目錄，但舊版 clasp 也可能落在專案裡。
+.clasprc.json
+appsscript/.clasprc.json
+
+# 建置與快取殘留
 .venv/
 cache/
 out/
+node_modules/
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
